@@ -74,6 +74,7 @@ pre{background:#0a101d;border:1px solid var(--line);border-radius:8px;padding:10
     <a href="#/settings">Settings</a>
   </nav>
   <div class="spacer"></div>
+  <span class="muted small" id="verinfo"></span>
   <span class="muted" id="whoami"></span>
   <button id="logout" style="display:none">Log out</button>
 </header>
@@ -167,7 +168,14 @@ function routes(){
 }
 function checkAndRoute(){
   api("/api/v1/me").then(m=>{AUTH=m.authed;AUTH?routes():renderLogin();
-    if(AUTH){$("#logout").style.display="";$("#whoami").textContent="admin";}
+    if(AUTH){$("#logout").style.display="";$("#whoami").textContent="admin";
+      api("/api/v1/version").then(v=>{
+        const txt="v"+v.server_version+" · build "+v.build;
+        $("#verinfo").textContent=txt;
+        document.querySelector("footer").firstChild.textContent=
+          "OpenEyes "+txt+" · open-source internet monitoring · ";
+      }).catch(()=>{});
+    }
   });
 }
 window.addEventListener("hashchange",routes);
@@ -217,7 +225,7 @@ async function renderAgents(){
   app.innerHTML=`<h1 class="page">Agents</h1><div class="panel">
   ${d.items.length?`<table><tr><th>Name</th><th>OS</th><th>WAN IP</th><th>Location</th><th>Version</th><th>Labels</th><th>Last seen</th><th>Status</th><th></th></tr>
     ${d.items.map(a=>{
-      const loc=a.latitude!=null?`<span class="mono small">${Number(a.latitude).toFixed(2)}, ${Number(a.longitude).toFixed(2)}</span><div class="muted small">${a.city?esc(a.city)+", ":""}${esc(a.country||a.location_source||"")}</div>`:'<span class="muted">—</span>';
+      const loc=a.latitude!=null?`<b class="small">${esc(a.location_display||"")}</b><div class="muted mono small">${Number(a.latitude).toFixed(2)}, ${Number(a.longitude).toFixed(2)} · ${esc(a.location_source||"")}</div>`:'<span class="muted">—</span>';
       return `<tr><td><b>${esc(a.name)}</b><div class="muted mono small">${esc(a.id)}</div></td>
       <td class="small">${esc(a.os)} / ${esc(a.arch)}</td><td class="mono small">${esc(a.wan_ip)}</td>
       <td>${loc}</td>
@@ -366,13 +374,14 @@ async function renderLocations(){
   </div>
   <div class="panel"><h2>Devices</h2>${items.length?`<table>
     <tr><th>Name</th><th>Kind</th><th>Source</th><th>Coordinates</th><th>City / Country</th><th>WAN IP</th><th>Last seen</th></tr>
-    ${items.map(i=>`<tr><td>${esc(i.name)}</td>
+    ${items.map(i=>{const src=i.source==="gps"?"GPS":i.source==="config"?"configured site":i.source==="device"?"device":"WAN IP";
+      return `<tr><td>${esc(i.name)}</td>
       <td><span class="badge ${i.kind==="agent"?"ok":"info"}">${i.kind}</span></td>
-      <td class="small">${i.source==="gps"?"GPS":i.source==="config"?"config":"WAN IP"}</td>
+      <td class="small">${src}</td>
       <td class="mono small">${i.lat.toFixed(3)}, ${i.lng.toFixed(3)}${i.accuracy_m?" ±"+Math.round(i.accuracy_m)+"m":""}</td>
-      <td class="small">${i.city?esc(i.city)+", ":""}${esc(i.country||"—")}</td>
+      <td class="small"><b>${esc(i.display||"—")}</b></td>
       <td class="mono small">${esc(i.wan_ip||"—")}</td>
-      <td class="small">${fmtAgo(i.last_seen)}</td></tr>`).join("")}</table>`:""}</div>`;
+      <td class="small">${fmtAgo(i.last_seen)}</td></tr>`;}).join("")}</table>`:""}</div>`;
   autoRefresh(renderLocations,15000);
 }
 
@@ -402,7 +411,7 @@ async function renderSettings(){
     <td class="mono small">${esc(String(v.sha256).slice(0,16))}…</td>
     <td><button class="danger small" onclick="delAsset('${esc(v.file)}')">Remove</button></td></tr>`).join("");
   app.innerHTML=`<h1 class="page">Settings</h1>
-  <div class="panel"><h2>Updates <span class="muted small">— server v${esc(ver.server_version)}</span></h2>
+  <div class="panel"><h2>Updates <span class="muted small">— server v${esc(ver.server_version)} · build ${esc(ver.build)}</span></h2>
     <div class="row" style="margin-bottom:8px">
       <span class="small">Published agent version: <b>${esc(m.agent_version||"none")}</b></span>
       <span class="small muted">${m.published_at?"published "+fmtAgo(m.published_at):""}</span>

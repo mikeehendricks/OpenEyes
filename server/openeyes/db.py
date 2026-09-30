@@ -160,8 +160,9 @@ class Database:
         info: dict[str, Any] = {"first_run": False}
         if self.get_meta("admin_password_hash") is None:
             password = secrets.token_urlsafe(12)
+            salt = secrets.token_hex(8)
             self.set_meta("admin_password", password)  # stored for first-run display only
-            self.set_meta("admin_password_hash", _hash_password(password))
+            self.set_meta("admin_password_hash", f"{salt}${_hash_password(password, salt)}")
             info["first_run"] = True
             info["admin_password"] = password
         if self.get_meta("enrollment_token") is None:
@@ -477,10 +478,16 @@ class Database:
             self._conn.close()
 
 
-def _hash_password(password: str) -> str:
+def _hash_password(password: str, salt: str = "") -> str:
     import hashlib
-    return hashlib.sha256(password.encode()).hexdigest()
+    return hashlib.sha256((salt + password).encode()).hexdigest()
 
 
-def verify_password(password: str, hashed: str) -> bool:
-    return secrets.compare_digest(_hash_password(password), hashed)
+def verify_password(password: str, stored: str) -> bool:
+    """Accepts both the salted ('salt$hash') and legacy unsalted formats."""
+    if not stored:
+        return False
+    if "$" in stored:
+        salt, _, digest = stored.partition("$")
+        return secrets.compare_digest(_hash_password(password, salt), digest)
+    return secrets.compare_digest(_hash_password(password), stored)

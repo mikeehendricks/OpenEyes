@@ -35,8 +35,10 @@ STATIC = os.path.join(HERE, "static")
 SESSION_COOKIE = "openeyes_session"
 SESSION_TTL = 12 * 3600
 VALID_TEST_TYPES = {"http", "tcp", "ping", "dns", "trace"}
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
+BUILD_NUMBER = 151
 ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+WEBPROBE_RATE_PER_MIN = 30
 # Injected for tests: actually performed by os.execv in production.
 _exec_restart = None  # set inside create_app
 
@@ -45,12 +47,21 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _location_display(lat, lng, city, country) -> str:
+    """Human-readable place name; coordinates only as a fallback."""
+    if city or country:
+        return ", ".join(x for x in (city, country) if x)
+    if lat is not None and lng is not None:
+        return f"{float(lat):.2f}, {float(lng):.2f}"
+    return ""
+
+
 # --------------------------------------------------------------------------
 # Request models (module-level so FastAPI resolves them as bodies)
 # --------------------------------------------------------------------------
 
 class LoginBody(BaseModel):
-    password: str
+    password: str = Field(max_length=256)
 
 
 class WebProbeBody(BaseModel):
@@ -59,32 +70,32 @@ class WebProbeBody(BaseModel):
 
 
 class RegisterBody(BaseModel):
-    enrollment_token: str
-    hostname: str = "unknown"
-    os: str = "unknown"
-    arch: str = "unknown"
-    version: str = "0.0.0"
-    labels: list[str] = Field(default_factory=list)
+    enrollment_token: str = Field(max_length=256)
+    hostname: str = Field(default="unknown", max_length=200)
+    os: str = Field(default="unknown", max_length=64)
+    arch: str = Field(default="unknown", max_length=64)
+    version: str = Field(default="0.0.0", max_length=32)
+    labels: list[str] = Field(default_factory=list, max_length=32)
     location: Optional[dict] = None  # optional fixed site coords from config
 
 
 class ResultItem(BaseModel):
-    test_id: str
+    test_id: str = Field(max_length=64)
     ts: float
-    status: str  # ok | fail | error
+    status: str = Field(max_length=16)  # ok | fail | error
     metrics: dict = Field(default_factory=dict)
-    error: Optional[str] = None
+    error: Optional[str] = Field(default=None, max_length=2000)
 
 
 class ResultsBody(BaseModel):
-    results: list[ResultItem] = Field(default_factory=list)
+    results: list[ResultItem] = Field(default_factory=list, max_length=500)
     sysinfo: Optional[dict] = None
 
 
 class TestBody(BaseModel):
-    name: str
-    type: str
-    target: str
+    name: str = Field(max_length=200)
+    type: str = Field(max_length=16)
+    target: str = Field(max_length=500)
     interval_sec: int = 60
     timeout_ms: int = 5000
     params: dict = Field(default_factory=dict)
@@ -131,6 +142,38 @@ def create_app(data_dir: str | None = None,
             db.set_agent_location(agent_id, lat=geo["lat"], lng=geo["lon"],
                                   source="wan-ip", city=geo.get("city"),
                                   country=geo.get("country"))
+
+    # --------------------------------------------- hardening: headers + rate
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+        return response
+
+    class _RateLimiter:
+        """Fixed-window per-IP limiter for the unauthenticated ingest path."""
+
+        def __init__(self, per_minute: int):
+            self.limit = per_minute
+            self.hits: dict[str, list[float]] = {}
+
+        def allow(self, ip: str) -> bool:
+            now = time.time()
+            bucket = [t for t in self.hits.get(ip, []) if now - t < 60]
+            if len(bucket) >= self.limit:
+                self.hits[ip] = bucket
+                return False
+            bucket.append(now)
+            self.hits[ip] = bucket
+            if len(self.hits) > 10000:  # memory bound
+                self.hits = {k: v for k, v in self.hits.items()
+                             if v and now - v[-1] < 120}
+            return True
+
+    webprobe_limiter = _RateLimiter(WEBPROBE_RATE_PER_MIN)
+    app.state.webprobe_limiter = webprobe_limiter
 
     # ------------------------------------------------------------- lifecycle
     @app.on_event("shutdown")
@@ -220,6 +263,8 @@ def create_app(data_dir: str | None = None,
     def webprobe_results(body: WebProbeBody, request: Request):
         ua = request.headers.get("user-agent", "")
         ip = request.client.host if request.client else "?"
+        if not webprobe_limiter.allow(ip):
+            raise HTTPException(status_code=429, detail="rate limit exceeded")
         lat = lng = acc = None
         loc = body.location or {}
         if isinstance(loc, dict) and loc.get("lat") is not None \
@@ -301,13 +346,19 @@ def create_app(data_dir: str | None = None,
         db.touch_agent(agent_id, ip)
         if body.sysinfo:
             db.update_agent_sysinfo(agent_id, body.sysinfo)
-            loc = body.sysinfo.get("location") or {}
-            if loc.get("lat") is not None and loc.get("lng") is not None:
-                try:
-                    db.set_agent_location(agent_id, lat=float(loc["lat"]),
-                                          lng=float(loc["lng"]), source="config")
-                except (TypeError, ValueError):
-                    pass
+            # device-resolved actual location wins over configured coords
+            for key, source in (("location_actual", "device"),
+                                ("location", "config")):
+                loc = body.sysinfo.get(key) or {}
+                if loc.get("lat") is not None and loc.get("lng") is not None:
+                    try:
+                        db.set_agent_location(
+                            agent_id, lat=float(loc["lat"]), lng=float(loc["lng"]),
+                            source=source, city=loc.get("city"),
+                            country=loc.get("country"))
+                        break
+                    except (TypeError, ValueError):
+                        continue
         # Opportunistic GeoIP when the WAN IP changed and we have no fix yet.
         if ip and agent.get("latitude") is None and not agent.get("location_source"):
             threading.Thread(target=_geolocate_agent, args=(agent_id, ip),
@@ -402,6 +453,9 @@ def create_app(data_dir: str | None = None,
             a["sysinfo"] = json.loads(a["sysinfo"] or "{}")
             a["online"] = (now - a["last_seen"]) < 120
             a["wan_ip"] = a.pop("ip", None)
+            a["location_display"] = _location_display(
+                a.get("latitude"), a.get("longitude"), a.get("city"),
+                a.get("country"))
             items.append(a)
         return {"items": items}
 
@@ -418,6 +472,9 @@ def create_app(data_dir: str | None = None,
                           "source": a.get("location_source") or "wan-ip",
                           "wan_ip": a.get("ip"), "city": a.get("city"),
                           "country": a.get("country"),
+                          "display": _location_display(
+                              a["latitude"], a["longitude"], a.get("city"),
+                              a.get("country")),
                           "last_seen": a["last_seen"],
                           "online": (now - a["last_seen"]) < 120})
         for w in db.list_webprobes(limit=200):
@@ -429,6 +486,9 @@ def create_app(data_dir: str | None = None,
                           "kind": "webprobe", "lat": w["latitude"],
                           "lng": w["longitude"], "source": "gps",
                           "wan_ip": w["ip"], "city": None, "country": None,
+                          "display": _location_display(w["latitude"],
+                                                       w["longitude"],
+                                                       None, None),
                           "accuracy_m": w.get("accuracy"),
                           "last_seen": w["ts"], "online": False})
         return {"items": items}
@@ -519,8 +579,11 @@ def create_app(data_dir: str | None = None,
     @app.get("/api/v1/version")
     def version(request: Request):
         _require_admin(request)
+        m = _read_manifest()
         return {"server_version": SERVER_VERSION,
-                "manifest": _read_manifest()}
+                "build": BUILD_NUMBER,
+                "agent_latest": m.get("agent_version"),
+                "manifest": m}
 
     @app.get("/api/v1/update/manifest")
     def update_manifest():

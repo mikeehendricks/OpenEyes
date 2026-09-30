@@ -21,10 +21,12 @@ import urllib.request
 
 from . import updater
 from .config import AgentConfig, load_state, save_state
-from .probes import dns_probe, http_probe, ping_probe, sysinfo, tcp_probe, trace_probe
+from .probes import (dns_probe, geolocate, http_probe, ping_probe, sysinfo,
+                     tcp_probe, trace_probe)
 
-AGENT_VERSION = "1.1.0"
+AGENT_VERSION = "1.2.0"
 ENROLL_MAX_BACKOFF = 60.0
+GEO_REFRESH_SEC = 6 * 3600  # re-resolve own location every 6 h
 PROBES = {
     "http": http_probe.run,
     "tcp": tcp_probe.run,
@@ -159,6 +161,24 @@ class Agent:
             return {"test_id": test["id"], "ts": started, "status": "error",
                     "metrics": {}, "error": f"{type(e).__name__}: {e}"}
 
+    def _collect_sysinfo(self) -> dict:
+        """System snapshot + the device's actual geolocated position."""
+        now = time.monotonic()
+        if getattr(self, "_geo_at", -1e9) + GEO_REFRESH_SEC <= now:
+            self._geo_at = now
+            self._geo = geolocate.own_location()
+            if self._geo:
+                self.log("Device location: "
+                         f"{self._geo.get('city') or '?'}, "
+                         f"{self._geo.get('country') or '?'}")
+        info = sysinfo.collect()
+        info["agent_version"] = AGENT_VERSION
+        if getattr(self, "_geo", None):
+            info["location_actual"] = self._geo
+        if self.cfg.location:
+            info["location"] = self.cfg.location
+        return info
+
     def flush_results(self) -> int:
         batch: list[dict] = []
         while True:
@@ -171,14 +191,11 @@ class Agent:
         if not batch:
             return 0
         body = {"results": batch}
-        # attach a sysinfo snapshot on the first flush of each run
-        if not getattr(self, "_sent_sysinfo", False):
-            info = sysinfo.collect()
-            info["agent_version"] = AGENT_VERSION
-            if self.cfg.location:
-                info["location"] = self.cfg.location
-            body["sysinfo"] = info
-            self._sent_sysinfo = True
+        # heartbeat: sysinfo + actual device location, refreshed every 6 h
+        now = time.monotonic()
+        if getattr(self, "_sysinfo_at", -1e9) + GEO_REFRESH_SEC <= now:
+            self._sysinfo_at = now
+            body["sysinfo"] = self._collect_sysinfo()
         try:
             self._request("POST", "/api/v1/agents/me/results", body)
             return len(batch)

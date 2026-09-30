@@ -193,7 +193,8 @@ the manifest, replace their own executable, and exit — the service manager
 (systemd / launchd / scheduled task) restarts them on the new version.
 Source-mode installs log the available update instead of self-replacing.
 
-**Server.** The dashboard shows the running server version; use
+**Server.** The portal shows the server version + build number in the header,
+footer, Settings, and `GET /api/v1/version`. Use
 *Settings → Restart server* (or `POST /api/v1/admin/restart`) for an in-place
 restart after pulling new code — state lives in SQLite and survives.
 
