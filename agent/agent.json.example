@@ -1,0 +1,7 @@
+{
+  "server_url": "https://eyes.example.com:8080",
+  "enrollment_token": "PASTE-TOKEN-FROM-SERVER",
+  "insecure_tls": false,
+  "labels": ["main-office"],
+  "poll_interval_sec": 30
+}

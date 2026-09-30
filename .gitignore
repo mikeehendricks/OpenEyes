@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+demo-data/
+*.db
+*.db-wal
+*.db-shm
+first_run.txt
+agent-state.json
+dist/
+build/
+*.spec
+.DS_Store

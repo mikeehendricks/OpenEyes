@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenEyes internet monitoring server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openeyes
+Group=openeyes
+WorkingDirectory=/opt/openeyes
+ExecStart=/opt/openeyes/.venv/bin/python -m openeyes --host 0.0.0.0 --port 8080 --data-dir /var/lib/openeyes
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

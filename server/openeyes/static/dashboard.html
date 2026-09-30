@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenEyes — Internet Monitoring</title>
+<style>
+:root{
+  --bg:#0e1526; --panel:#161f33; --panel2:#1d2942; --line:#2a3854;
+  --text:#e6ecf7; --dim:#8ea0c0; --acc:#4da3ff; --ok:#38c172;
+  --warn:#f0a500; --err:#e05260; --mono:ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--acc);text-decoration:none}
+header{display:flex;align-items:center;gap:14px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+header .logo{font-weight:700;font-size:17px;letter-spacing:.4px}
+header .logo span{color:var(--acc)}
+nav{display:flex;gap:4px;margin-left:16px}
+nav a{padding:6px 12px;border-radius:8px;color:var(--dim)}
+nav a.on,nav a:hover{background:var(--panel2);color:var(--text)}
+header .spacer{flex:1}
+main{padding:20px;max-width:1200px;margin:0 auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.card .num{font-size:26px;font-weight:700}
+.card .lbl{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.6px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:18px}
+.panel h2{font-size:15px;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+tr:last-child td{border-bottom:none}
+.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.badge.ok{background:#12351f;color:var(--ok)}
+.badge.fail,.badge.err{background:#3a161c;color:var(--err)}
+.badge.off{background:#333;color:#999}
+.badge.info{background:#14263d;color:var(--acc)}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.primary{background:var(--acc);border-color:var(--acc);color:#06121f;font-weight:600}
+button.danger{color:var(--err)}
+input,select,textarea{background:#0f1729;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;font-size:13px;width:100%}
+label{display:block;color:var(--dim);font-size:12px;margin:10px 0 4px}
+.row{display:flex;gap:12px}.row>div{flex:1}
+.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.muted{color:var(--dim);font-size:12px}
+code,.mono{font-family:var(--mono);font-size:12px}
+.spark{vertical-align:middle}
+#login{max-width:380px;margin:10vh auto}
+.chart-wrap{width:100%;overflow-x:auto}
+.flash{padding:10px 14px;border-radius:8px;margin-bottom:14px;display:none}
+.flash.err{display:block;background:#3a161c;color:#f2a2aa}
+.flash.okf{display:block;background:#12351f;color:#8fe0b0}
+.alertrow td:first-child{border-left:3px solid var(--err)}
+h1.page{font-size:18px;margin-bottom:14px}
+.chip{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 8px;font-size:11px;margin:1px 2px;color:var(--dim)}
+.small{font-size:12px}
+footer{padding:18px;text-align:center;color:#51617f;font-size:12px}
+details{margin-top:8px}summary{cursor:pointer;color:var(--dim);font-size:12px}
+pre{background:#0a101d;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">◉ Open<span>Eyes</span></div>
+  <nav id="nav">
+    <a href="#/overview">Overview</a>
+    <a href="#/agents">Agents</a>
+    <a href="#/tests">Tests</a>
+    <a href="#/alerts">Alerts</a>
+    <a href="#/locations">Locations</a>
+    <a href="#/webprobes">Web Probes</a>
+    <a href="#/settings">Settings</a>
+  </nav>
+  <div class="spacer"></div>
+  <span class="muted" id="whoami"></span>
+  <button id="logout" style="display:none">Log out</button>
+</header>
+<main id="app"></main>
+<footer>OpenEyes · open-source internet monitoring · <a href="/probe" target="_blank">open Web Probe (mobile)</a></footer>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const app=$("#app");
+let AUTH=false, TIMER=null;
+
+const fmtTs=t=>{const d=new Date(t*1000);return d.toLocaleString();};
+const fmtAgo=t=>{const s=Math.max(0,(Date.now()/1000-t));if(s<90)return Math.round(s)+"s ago";if(s<5400)return Math.round(s/60)+"m ago";if(s<172800)return Math.round(s/3600)+"h ago";return Math.round(s/86400)+"d ago";};
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function api(path,opts={}){
+  const o={headers:{"Content-Type":"application/json"},...opts};
+  if(o.body&&typeof o.body!=="string")o.body=JSON.stringify(o.body);
+  const r=await fetch(path,o);
+  if(r.status===401){AUTH=false;renderLogin();throw new Error("unauthorized");}
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.detail||r.statusText);
+  return j;
+}
+function spark(points,w=120,h=26,color="#4da3ff"){
+  if(!points||!points.length)return `<svg class="spark" width="${w}" height="${h}"></svg>`;
+  const vals=points.map(p=>p.lat).filter(v=>v!=null);
+  const max=Math.max(...vals,1),min=Math.min(...vals,0);
+  const step=w/Math.max(points.length-1,1);
+  let path="",dots="";
+  points.forEach((p,i)=>{
+    const x=i*step, y=p.lat==null?h-2:h-3-((p.lat-min)/(max-min||1))*(h-7);
+    path+=(i?"L":"M")+x.toFixed(1)+" "+y.toFixed(1)+" ";
+    if(p.status!=="ok")dots+=`<circle cx="${x}" cy="${h-3}" r="2" fill="#e05260"/>`;
+  });
+  return `<svg class="spark" width="${w}" height="${h}"><path d="${path}" fill="none" stroke="${color}" stroke-width="1.6"/>${dots}</svg>`;
+}
+function bigChart(points){
+  const w=900,h=220,padL=44,padB=22;
+  const vals=points.map(p=>p.lat).filter(v=>v!=null);
+  if(!vals.length)return '<div class="muted">No data yet.</div>';
+  const max=Math.max(...vals)*1.15||1,min=Math.min(...vals)*0.85;
+  const step=(w-padL-10)/Math.max(points.length-1,1);
+  let path="",area="",dots="",grid="";
+  for(let g=0;g<=4;g++){const y=8+(h-padB-8)*g/4;const v=max-(max-min)*g/4;
+    grid+=`<line x1="${padL}" x2="${w}" y1="${y}" y2="${y}" stroke="#2a3854" stroke-dasharray="3 4"/><text x="4" y="${y+4}" fill="#8ea0c0" font-size="10">${v.toFixed(0)}</text>`;}
+  points.forEach((p,i)=>{
+    const x=padL+i*step,y=p.lat==null?h-padB:8+(h-padB-8)*(1-(p.lat-min)/(max-min||1));
+    path+=(i?"L":"M")+x.toFixed(1)+" "+y.toFixed(1)+" ";
+    if(p.status!=="ok")dots+=`<circle cx="${x}" cy="${h-padB}" r="3" fill="#e05260"><title>${esc(p.error||"failure")} @ ${fmtTs(p.ts)}</title></circle>`;
+  });
+  area=path+`L${(padL+(points.length-1)*step).toFixed(1)} ${h-padB} L${padL} ${h-padB} Z`;
+  const t0=points[0].ts,t1=points[points.length-1].ts;
+  const xl=`<text x="${padL}" y="${h-6}" fill="#8ea0c0" font-size="10">${new Date(t0*1000).toLocaleTimeString()}</text><text x="${w-90}" y="${h-6}" fill="#8ea0c0" font-size="10">${new Date(t1*1000).toLocaleTimeString()}</text>`;
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto">${grid}<path d="${area}" fill="rgba(77,163,255,.12)"/><path d="${path}" fill="none" stroke="#4da3ff" stroke-width="2"/>${dots}${xl}</svg>`;
+}
+
+/* ------------------------------------------------------------ login */
+function renderLogin(msg){
+  clearInterval(TIMER);
+  $("#logout").style.display="none";
+  app.innerHTML=`<div class="panel" id="login"><h2>OpenEyes sign in</h2>
+    <div class="flash ${msg?'err':''}" id="lflash">${esc(msg||"")}</div>
+    <label>Admin password</label><input type="password" id="pw" autocomplete="current-password">
+    <div style="margin-top:14px"><button class="primary" style="width:100%" onclick="doLogin()">Sign in</button></div>
+    <p class="muted" style="margin-top:12px">The password was printed by the server on first start and is in <code>~/.openeyes/first_run.txt</code>.</p>
+  </div>`;
+  $("#pw").addEventListener("keydown",e=>{if(e.key==="Enter")doLogin();});
+  $("#pw").focus();
+}
+async function doLogin(){
+  try{await api("/api/v1/login",{method:"POST",body:{password:$("#pw").value}});
+    AUTH=true;checkAndRoute();}
+  catch(e){renderLogin("Invalid password");}
+}
+$("#logout").onclick=async()=>{try{await api("/api/v1/logout",{method:"POST"});}catch(e){}AUTH=false;renderLogin();};
+
+/* ------------------------------------------------------------ router */
+function routes(){
+  const h=location.hash||"#/overview";
+  for(const a of $("#nav").children)a.classList.toggle("on",a.getAttribute("href")===h.split("?")[0]);
+  if(!AUTH)return renderLogin();
+  if(h.startsWith("#/tests/"))return renderTestDetail(h.split("/")[2]);
+  if(h==="#/agents")return renderAgents();
+  if(h==="#/tests")return renderTests();
+  if(h==="#/alerts")return renderAlerts();
+  if(h==="#/locations")return renderLocations();
+  if(h==="#/webprobes")return renderWebProbes();
+  if(h==="#/settings")return renderSettings();
+  return renderOverview();
+}
+function checkAndRoute(){
+  api("/api/v1/me").then(m=>{AUTH=m.authed;AUTH?routes():renderLogin();
+    if(AUTH){$("#logout").style.display="";$("#whoami").textContent="admin";}
+  });
+}
+window.addEventListener("hashchange",routes);
+function autoRefresh(fn,ms=5000){clearInterval(TIMER);TIMER=setInterval(()=>{if(AUTH)fn();},ms);}
+
+/* ------------------------------------------------------------ overview */
+async function renderOverview(){
+  app.innerHTML='<div class="muted">Loading…</div>';
+  const [stats,alerts,tests,agents]=await Promise.all([
+    api("/api/v1/stats"),api("/api/v1/alerts"),api("/api/v1/tests"),api("/api/v1/agents")]);
+  const online=agents.items.filter(a=>a.online).length;
+  let html=`<h1 class="page">Overview</h1><div class="cards">
+    <div class="card"><div class="num">${agents.items.length}</div><div class="lbl">Agents (${online} online)</div></div>
+    <div class="card"><div class="num">${tests.items.length}</div><div class="lbl">Tests</div></div>
+    <div class="card"><div class="num">${stats.results_last_5m}</div><div class="lbl">Results / 5 min</div></div>
+    <div class="card"><div class="num" style="color:${stats.open_alerts?'var(--err)':'var(--ok)'}">${stats.open_alerts}</div><div class="lbl">Open alerts</div></div>
+  </div>`;
+  html+=`<div class="panel"><h2>Open alerts</h2>${alerts.items.length?alertTable(alerts.items):'<div class="muted">All clear 🎉</div>'}</div>`;
+  html+=`<div class="panel"><h2>Tests</h2>${tests.items.length?await testTable(tests.items):'<div class="muted">No tests yet — create one in <a href="#/tests">Tests</a>.</div>'}</div>`;
+  app.innerHTML=html;
+  autoRefresh(renderOverview,7000);
+}
+function alertTable(items){
+  return `<table><tr><th>Test</th><th>Agent</th><th>Kind</th><th>Detail</th><th>Since</th></tr>
+  ${items.map(a=>`<tr class="alertrow"><td>${esc(a.test_name)}</td><td>${esc(a.agent_name)}</td>
+    <td><span class="badge fail">${esc(a.kind)}</span></td><td class="small">${esc(a.detail||"")}</td>
+    <td class="small">${fmtAgo(a.started_ts)}</td></tr>`).join("")}</table>`;
+}
+async function testTable(tests){
+  const rows=[];
+  for(const t of tests){
+    const res=await api(`/api/v1/results?test_id=${t.id}&limit=40`);
+    const pts=res.items.reverse().map(r=>({ts:r.ts,lat:r.metrics.latency_ms??null,status:r.status,error:r.error}));
+    const last=res.items[res.items.length-1];
+    const st=last?(last.status==="ok"?'<span class="badge ok">OK</span>':'<span class="badge fail">FAIL</span>'):'<span class="badge off">no data</span>';
+    rows.push(`<tr><td><a href="#/tests/${t.id}">${esc(t.name)}</a><div class="muted">${esc(t.type)} → ${esc(t.target)}</div></td>
+      <td>${st}</td><td>${spark(pts)}</td>
+      <td class="mono small">${last&&last.metrics.latency_ms!=null?last.metrics.latency_ms.toFixed(1)+" ms":"—"}</td>
+      <td class="small">${t.enabled?"enabled":"disabled"} · ${t.interval_sec}s</td></tr>`);
+  }
+  return `<table><tr><th>Test</th><th>Status</th><th>Trend</th><th>Last latency</th><th>Config</th></tr>${rows.join("")}</table>`;
+}
+
+/* ------------------------------------------------------------ agents */
+async function renderAgents(){
+  const d=await api("/api/v1/agents");
+  app.innerHTML=`<h1 class="page">Agents</h1><div class="panel">
+  ${d.items.length?`<table><tr><th>Name</th><th>OS</th><th>WAN IP</th><th>Location</th><th>Version</th><th>Labels</th><th>Last seen</th><th>Status</th><th></th></tr>
+    ${d.items.map(a=>{
+      const loc=a.latitude!=null?`<span class="mono small">${Number(a.latitude).toFixed(2)}, ${Number(a.longitude).toFixed(2)}</span><div class="muted small">${a.city?esc(a.city)+", ":""}${esc(a.country||a.location_source||"")}</div>`:'<span class="muted">—</span>';
+      return `<tr><td><b>${esc(a.name)}</b><div class="muted mono small">${esc(a.id)}</div></td>
+      <td class="small">${esc(a.os)} / ${esc(a.arch)}</td><td class="mono small">${esc(a.wan_ip)}</td>
+      <td>${loc}</td>
+      <td class="small">${esc(a.agent_version)}</td>
+      <td>${(a.labels||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join("")||'<span class="muted">—</span>'}</td>
+      <td class="small">${fmtAgo(a.last_seen)}</td>
+      <td>${a.online?'<span class="badge ok">online</span>':'<span class="badge off">offline</span>'}</td>
+      <td><button class="danger small" onclick="delAgent('${a.id}')">Remove</button></td></tr>`;}).join("")}</table>`
+   :'<div class="muted">No agents enrolled yet. Run an agent or open the <a href="/probe">Web Probe</a> on a phone.</div>'}
+  </div>`;
+  autoRefresh(renderAgents,7000);
+}
+window.delAgent=async id=>{if(confirm("Remove this agent and its results?")){await api(`/api/v1/agents/${id}`,{method:"DELETE"});renderAgents();}};
+
+/* ------------------------------------------------------------ tests list */
+async function renderTests(){
+  const d=await api("/api/v1/tests");
+  app.innerHTML=`<h1 class="page">Tests</h1>
+  <div class="panel"><h2>New test</h2>
+    <div class="formgrid">
+      <div><label>Name</label><input id="t_name" placeholder="Webex reachability"></div>
+      <div><label>Type</label><select id="t_type">
+        <option value="http">HTTP(S)</option><option value="tcp">TCP port</option>
+        <option value="ping">Ping (ICMP)</option><option value="dns">DNS lookup</option>
+        <option value="trace">Traceroute</option></select></div>
+      <div><label>Target</label><input id="t_target" placeholder="https://example.com or host:port or hostname"></div>
+      <div><label>Interval (sec)</label><input id="t_int" type="number" value="60" min="5"></div>
+      <div><label>Timeout (ms)</label><input id="t_to" type="number" value="5000" min="100"></div>
+      <div><label>Assign to</label><select id="t_assign"><option value="all">All agents</option><option value="labels">Labels (comma-separated below)</option></select></div>
+      <div><label>Alert after N consecutive failures</label><input id="t_streak" type="number" value="2" min="1"></div>
+      <div><label>Alert latency threshold (ms, blank = off)</label><input id="t_lat" type="number" placeholder="e.g. 500"></div>
+    </div>
+    <div style="margin-top:14px"><button class="primary" onclick="createTest()">Create test</button>
+      <span class="muted" id="t_msg"></span></div>
+  </div>
+  <div class="panel"><h2>Existing tests</h2>${d.items.length?await testTable(d.items):'<div class="muted">None yet.</div>'}</div>`;
+  autoRefresh(()=>{},100000);
+}
+window.createTest=async()=>{
+  const g=id=>$(id).value.trim();
+  const params={alert_fail_streak:parseInt(g("#t_streak")||"2",10)};
+  const lat=g("#t_lat");if(lat)params.alert_latency_ms=parseFloat(lat);
+  const mode=$("#t_assign").value;
+  const body={name:g("#t_name")||g("#t_target"),type:$("#t_type").value,target:g("#t_target"),
+    interval_sec:parseInt(g("#t_int")||"60",10),timeout_ms:parseInt(g("#t_to")||"5000",10),
+    params,assign:mode==="labels"?{mode:"labels",labels:prompt("Labels (comma separated):","branch").split(",").map(s=>s.trim()).filter(Boolean)}:{mode:"all"}};
+  try{await api("/api/v1/tests",{method:"POST",body});renderTests();}
+  catch(e){$("#t_msg").textContent="Error: "+e.message;}
+};
+
+/* ------------------------------------------------------------ test detail */
+async function renderTestDetail(id){
+  const [tests,res,agents]=await Promise.all([api("/api/v1/tests"),api(`/api/v1/results?test_id=${id}&limit=300`),api("/api/v1/agents")]);
+  const t=tests.items.find(x=>x.id===id);
+  if(!t){app.innerHTML='<div class="muted">Test not found.</div>';return;}
+  const byAgent={};
+  res.items.forEach(r=>{(byAgent[r.agent_id]=byAgent[r.agent_id]||[]).push(r);});
+  const aname=a=>{const x=agents.items.find(i=>i.id===a);return x?x.name:a;};
+  const overall=res.items.slice().reverse().map(r=>({ts:r.ts,lat:r.metrics.latency_ms??null,status:r.status,error:r.error}));
+  const oks=res.items.filter(r=>r.status==="ok").length;
+  const lats=res.items.map(r=>r.metrics.latency_ms).filter(v=>v!=null);
+  const avg=lats.length?lats.reduce((a,b)=>a+b,0)/lats.length:null;
+  app.innerHTML=`<h1 class="page"><a href="#/tests">← Tests</a> · ${esc(t.name)}
+     <button class="danger small" style="float:right" onclick="delTest('${t.id}')">Delete test</button>
+     <button class="small" style="float:right;margin-right:8px" onclick="toggleTest('${t.id}')">${t.enabled?"Disable":"Enable"}</button></h1>
+  <div class="cards">
+    <div class="card"><div class="num">${res.items.length}</div><div class="lbl">Results (window)</div></div>
+    <div class="card"><div class="num">${res.items.length?(100*oks/res.items.length).toFixed(0)+"%":"—"}</div><div class="lbl">Success rate</div></div>
+    <div class="card"><div class="num">${avg!=null?avg.toFixed(1)+" ms":"—"}</div><div class="lbl">Avg latency</div></div>
+    <div class="card"><div class="num">${Object.keys(byAgent).length}</div><div class="lbl">Reporting agents</div></div>
+  </div>
+  <div class="panel"><h2>Latency (all agents)</h2><div class="chart-wrap">${bigChart(overall)}</div>
+    <p class="muted">Red dots on the axis = failures. ${esc(t.type)} → <code>${esc(t.target)}</code> every ${t.interval_sec}s</p></div>
+  <div class="panel"><h2>Per agent</h2><table><tr><th>Agent</th><th>Last status</th><th>Trend</th><th>Last latency</th><th>Last result</th></tr>
+    ${Object.entries(byAgent).map(([aid,rs])=>{
+      const pts=rs.slice().reverse().map(r=>({ts:r.ts,lat:r.metrics.latency_ms??null,status:r.status,error:r.error}));
+      const last=rs[0];
+      return `<tr><td>${esc(aname(aid))}</td>
+        <td>${last.status==="ok"?'<span class="badge ok">OK</span>':'<span class="badge fail">'+esc(last.status)+'</span>'}</td>
+        <td>${spark(pts)}</td><td class="mono small">${last.metrics.latency_ms!=null?last.metrics.latency_ms.toFixed(1)+" ms":"—"}</td>
+        <td class="small muted">${fmtAgo(last.ts)}${last.error?" · "+esc(last.error):""}</td></tr>`;
+    }).join("")}</table></div>`;
+  autoRefresh(()=>renderTestDetail(id),5000);
+}
+window.delTest=async id=>{if(confirm("Delete this test and its results?")){await api(`/api/v1/tests/${id}`,{method:"DELETE"});location.hash="#/tests";}};
+window.toggleTest=async(id)=>{
+  const tests=await api("/api/v1/tests");
+  const t=tests.items.find(x=>x.id===id);
+  if(!t)return;
+  const body={name:t.name,type:t.type,target:t.target,interval_sec:t.interval_sec,
+              timeout_ms:t.timeout_ms,params:t.params,assign:t.assign,enabled:!t.enabled};
+  await api(`/api/v1/tests/${id}`,{method:"PATCH",body});
+  renderTestDetail(id);
+};
+
+/* ------------------------------------------------------------ alerts */
+async function renderAlerts(){
+  const [open,hist]=await Promise.all([api("/api/v1/alerts"),api("/api/v1/alerts?include_resolved=true")]);
+  app.innerHTML=`<h1 class="page">Alerts</h1>
+  <div class="panel"><h2>Open</h2>${open.items.length?alertTable(open.items):'<div class="muted">None — all clear.</div>'}</div>
+  <div class="panel"><h2>History (resolved)</h2>
+    ${hist.items.filter(a=>a.resolved_ts).length?`<table><tr><th>Test</th><th>Agent</th><th>Kind</th><th>Started</th><th>Resolved</th></tr>
+      ${hist.items.filter(a=>a.resolved_ts).map(a=>`<tr><td>${esc(a.test_name)}</td><td>${esc(a.agent_name)}</td>
+        <td><span class="badge info">${esc(a.kind)}</span></td><td class="small">${fmtTs(a.started_ts)}</td>
+        <td class="small">${fmtTs(a.resolved_ts)}</td></tr>`).join("")}</table>`:'<div class="muted">No resolved alerts yet.</div>'}
+  </div>`;
+  autoRefresh(renderAlerts,7000);
+}
+
+/* ------------------------------------------------------------ locations */
+const LAND=[ // very simplified continent outlines (lon,lat)
+[[-168,66],[-160,72],[-130,72],[-90,80],[-70,78],[-60,60],[-55,50],[-65,44],[-75,35],[-81,25],[-90,20],[-97,16],[-105,20],[-115,30],[-125,40],[-130,55],[-150,60],[-168,66]],
+[[-45,60],[-25,70],[-20,80],[-40,83],[-60,82],[-55,70],[-45,60]],
+[[-80,10],[-62,10],[-50,0],[-35,-8],[-40,-20],[-55,-35],[-65,-45],[-70,-52],[-75,-45],[-72,-20],[-80,-5],[-80,10]],
+[[-17,15],[-5,35],[10,37],[20,32],[32,31],[43,11],[51,10],[40,-5],[35,-20],[25,-34],[18,-34],[12,-18],[8,4],[-8,4],[-17,15]],
+[[-10,36],[-8,43],[-5,48],[0,50],[-5,58],[5,62],[15,68],[30,70],[40,66],[30,45],[25,38],[15,38],[5,43],[-10,36]],
+[[40,66],[60,70],[90,75],[110,75],[140,72],[180,66],[178,62],[160,60],[145,45],[130,35],[120,25],[105,12],[95,8],[80,8],[72,20],[60,25],[45,28],[35,35],[40,45],[40,66]],
+[[113,-22],[122,-18],[132,-12],[142,-11],[148,-18],[153,-28],[147,-38],[135,-35],[124,-33],[114,-33],[113,-22]],
+[[-180,-71],[180,-71],[180,-90],[-180,-90],[-180,-71]]];
+function proj(lng,lat,W,H){return [(lng+180)/360*W,(90-lat)/180*H];}
+function worldMap(items){
+  const W=960,H=480;
+  let land="";
+  for(const poly of LAND){
+    const pts=poly.map(([lo,la])=>proj(lo,la,W,H).map(v=>v.toFixed(1)).join(",")).join(" ");
+    land+=`<polygon points="${pts}" fill="#1d2942" stroke="#2a3854" stroke-width="1"/>`;
+  }
+  let grid="";
+  for(let lo=-180;lo<=180;lo+=30){const[x]=proj(lo,0,W,H);grid+=`<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="#16203a" stroke-width="1"/>`;}
+  for(let la=-60;la<=80;la+=30){const[,y]=proj(0,la,W,H);grid+=`<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="#16203a" stroke-width="1"/>`;}
+  let dots="";
+  for(const it of items){
+    const[x,y]=proj(it.lng,it.lat,W,H);
+    const col=it.kind==="agent"?(it.online?"#38c172":"#f0a500"):"#4da3ff";
+    dots+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6" fill="${col}" fill-opacity=".85" stroke="#0e1526" stroke-width="1.5">
+      <title>${esc(it.name)} — ${it.source==="gps"?"GPS":it.source==="config"?"configured site":"WAN IP geolocation"}${it.city?", "+esc(it.city):""}</title></circle>`;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:#0a101d;border-radius:10px">${grid}${land}${dots}</svg>`;
+}
+async function renderLocations(){
+  const d=await api("/api/v1/locations");
+  const items=d.items;
+  app.innerHTML=`<h1 class="page">Locations</h1>
+  <div class="panel">${items.length?worldMap(items):'<div class="muted">No located devices yet. Agents get located by WAN-IP geolocation (or fixed coords in their config); phones appear when GPS is enabled on the <a href="/probe">Web Probe</a>.</div>'}
+    <p class="muted" style="margin-top:8px"><span class="badge ok">●</span> agent online&nbsp; <span class="badge" style="background:#3a2f0e;color:#f0a500">●</span> agent offline&nbsp; <span class="badge info">●</span> mobile web probe (GPS)</p>
+  </div>
+  <div class="panel"><h2>Devices</h2>${items.length?`<table>
+    <tr><th>Name</th><th>Kind</th><th>Source</th><th>Coordinates</th><th>City / Country</th><th>WAN IP</th><th>Last seen</th></tr>
+    ${items.map(i=>`<tr><td>${esc(i.name)}</td>
+      <td><span class="badge ${i.kind==="agent"?"ok":"info"}">${i.kind}</span></td>
+      <td class="small">${i.source==="gps"?"GPS":i.source==="config"?"config":"WAN IP"}</td>
+      <td class="mono small">${i.lat.toFixed(3)}, ${i.lng.toFixed(3)}${i.accuracy_m?" ±"+Math.round(i.accuracy_m)+"m":""}</td>
+      <td class="small">${i.city?esc(i.city)+", ":""}${esc(i.country||"—")}</td>
+      <td class="mono small">${esc(i.wan_ip||"—")}</td>
+      <td class="small">${fmtAgo(i.last_seen)}</td></tr>`).join("")}</table>`:""}</div>`;
+  autoRefresh(renderLocations,15000);
+}
+
+/* ------------------------------------------------------------ web probes */
+async function renderWebProbes(){
+  const d=await api("/api/v1/webprobes");
+  app.innerHTML=`<h1 class="page">Web Probes <span class="muted small">(browser-based agents — Android / iOS / desktop)</span></h1>
+  <div class="panel">${d.items.length?`<table><tr><th>When</th><th>WAN IP</th><th>Device</th><th>HTTP result</th><th>Latency</th><th>GPS</th></tr>
+    ${d.items.map(w=>{const m=w.metrics||{};const dev=(m.device||"")+" "+(m.os||"");
+      const chk=m.checks&&m.checks.server?m.checks.server:(m.http?{ok:m.http.ok,total_ms:m.http.total_ms}:null);
+      const gps=w.latitude!=null?`<span class="mono small">${Number(w.latitude).toFixed(3)}, ${Number(w.longitude).toFixed(3)}</span>${w.accuracy?`<div class="muted small">±${Math.round(w.accuracy)} m</div>`:""}`:'<span class="muted">—</span>';
+      return `<tr><td class="small">${fmtAgo(w.ts)}</td><td class="mono small">${esc(w.ip)}</td>
+        <td class="small">${esc(dev)||esc(String(w.ua).slice(0,60))}</td>
+        <td>${chk&&chk.ok?'<span class="badge ok">OK</span>':'<span class="badge fail">FAIL</span>'}</td>
+        <td class="mono small">${chk&&chk.total_ms!=null?chk.total_ms.toFixed(0)+" ms":"—"}</td>
+        <td>${gps}</td></tr>`;}).join("")}</table>`
+   :'<div class="muted">No web probe runs yet. Open <a href="/probe">/probe</a> on a phone and tap “Run probe”.</div>'}</div>`;
+  autoRefresh(renderWebProbes,7000);
+}
+
+/* ------------------------------------------------------------ settings */
+async function renderSettings(){
+  const [et,at,ver]=await Promise.all([api("/api/v1/enrollment-token"),api("/api/v1/admin-token"),api("/api/v1/version")]);
+  const m=ver.manifest||{assets:{}};
+  const assets=Object.entries(m.assets||{}).map(([k,v])=>`<tr><td class="mono small">${esc(k)}</td>
+    <td class="mono small">${esc(v.file)}</td><td class="small">${v.size?(v.size/1048576).toFixed(1)+" MB":"—"}</td>
+    <td class="mono small">${esc(String(v.sha256).slice(0,16))}…</td>
+    <td><button class="danger small" onclick="delAsset('${esc(v.file)}')">Remove</button></td></tr>`).join("");
+  app.innerHTML=`<h1 class="page">Settings</h1>
+  <div class="panel"><h2>Updates <span class="muted small">— server v${esc(ver.server_version)}</span></h2>
+    <div class="row" style="margin-bottom:8px">
+      <span class="small">Published agent version: <b>${esc(m.agent_version||"none")}</b></span>
+      <span class="small muted">${m.published_at?"published "+fmtAgo(m.published_at):""}</span>
+    </div>
+    ${assets?`<table style="margin-bottom:12px"><tr><th>Platform</th><th>Artifact</th><th>Size</th><th>SHA-256</th><th></th></tr>${assets}</table>`:'<p class="muted small">No agent artifacts published yet. Agents auto-check every 6 h and self-replace when a newer version appears here.</p>'}
+    <div class="formgrid">
+      <div><label>New agent version</label><input id="u_ver" placeholder="e.g. 1.2.0"></div>
+      <div><label>Platform</label><select id="u_plat">
+        <option value="linux-x86_64">linux-x86_64</option><option value="linux-arm64">linux-arm64</option>
+        <option value="darwin-arm64">darwin-arm64 (Apple Silicon)</option><option value="darwin-x86_64">darwin-x86_64</option>
+        <option value="windows-x86_64">windows-x86_64</option><option value="windows-arm64">windows-arm64</option>
+      </select></div>
+    </div>
+    <label>Artifact file (PyInstaller binary or zip)</label>
+    <input id="u_file" type="file">
+    <div style="margin-top:12px" class="row">
+      <button class="primary" onclick="publishUpdate()">Publish update</button>
+      <button class="danger" onclick="restartServer()">Restart server</button>
+      <span class="muted small" id="u_msg"></span>
+    </div>
+  </div>
+  <div class="panel"><h2>Agent enrollment token</h2>
+    <p class="muted">Give this token to agents on first start — they exchange it for a permanent per-agent token.</p>
+    <div class="row" style="margin-top:10px"><div><code id="etok">${esc(et.token)}</code></div>
+    <div style="flex:0 0 auto"><button onclick="rotET()">Rotate</button></div></div></div>
+  <div class="panel"><h2>Admin API token</h2>
+    <p class="muted">Use as <code>X-Admin-Token</code> header for scripted access.</p>
+    <div class="row" style="margin-top:10px"><div><code id="atok">${esc(at.token)}</code></div></div></div>
+  <div class="panel"><h2>Install quick-reference</h2>
+  <details open><summary>Ubuntu server</summary><pre>curl -sSL https://raw.githubusercontent.com/you/openeyes/main/server/install_ubuntu.sh | sudo bash
+# or manually:
+sudo cp -r server /opt/openeyes && cd /opt/openeyes
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+sudo cp systemd/openeyes-server.service /etc/systemd/system/
+sudo systemctl enable --now openeyes-server</pre></details>
+  <details><summary>Desktop agent (Windows / macOS / Linux)</summary><pre>pip install openeyes-agent   # or: python -m openeyes_agent
+openeyes-agent --server https://YOUR-SERVER:8080 --enroll-token TOKEN</pre></details>
+  <details><summary>Android / iOS (Web Probe)</summary><pre>Open https://YOUR-SERVER:8080/probe in the device browser, tap "Run probe".
+Add the page to the home screen to use it like an app.</pre></details>
+  </div>`;
+  autoRefresh(()=>{},100000);
+}
+window.rotET=async()=>{const d=await api("/api/v1/enrollment-token/rotate",{method:"POST"});$("#etok").textContent=d.token;};
+window.publishUpdate=async()=>{
+  const msg=$("#u_msg");msg.textContent="";
+  const ver=$("#u_ver").value.trim(),plat=$("#u_plat").value,f=$("#u_file").files[0];
+  if(!ver||!f){msg.textContent="Enter a version and choose a file.";return;}
+  msg.textContent="Uploading…";
+  try{
+    const buf=await f.arrayBuffer();
+    const r=await fetch("/api/v1/update/assets/"+encodeURIComponent(f.name),{method:"PUT",
+      headers:{"X-Version":ver,"X-Platform":plat,"Content-Type":"application/octet-stream"},body:buf});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(j.detail||r.statusText);
+    msg.textContent="✔ Published "+ver+" for "+plat;
+    renderSettings();
+  }catch(e){msg.textContent="Error: "+e.message;}
+};
+window.delAsset=async(file)=>{if(confirm("Remove artifact "+file+"?")){await api("/api/v1/update/assets/"+encodeURIComponent(file),{method:"DELETE"});renderSettings();}};
+window.restartServer=async()=>{
+  if(!confirm("Restart the OpenEyes server now? The dashboard will reconnect in a few seconds."))return;
+  try{await api("/api/v1/admin/restart",{method:"POST"});}catch(e){}
+  $("#u_msg").textContent="Restarting…";
+  setTimeout(()=>location.reload(),4000);
+};
+
+/* ------------------------------------------------------------ boot */
+checkAndRoute();
+</script>
+</body>
+</html>

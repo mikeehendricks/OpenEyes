@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenEyes monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openeyes-agent
+ExecStart=/usr/bin/python3 -m openeyes_agent --config /etc/openeyes/agent.json
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
